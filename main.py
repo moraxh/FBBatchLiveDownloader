@@ -1,4 +1,5 @@
 import aiohttp
+import aiofiles
 import asyncio
 import subprocess
 import os
@@ -30,10 +31,7 @@ if not FB_GRAPH_API_KEY:
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Create an aiohttp session
-session = None
-
-async def fetch_live_streams(after_cursor=None):
+async def fetch_live_streams(session, semaphore, after_cursor=None):
     global founded_count
     params = {
         "fields": "video,status",
@@ -55,13 +53,13 @@ async def fetch_live_streams(after_cursor=None):
     logger.info(f"Found {len(streams)} live streams (Total so far: {founded_count})")
     
     if streams:
-        await process_live_streams(streams)
+        await process_live_streams(session, semaphore, streams)
     
     after_cursor = data.get('paging', {}).get('cursors', {}).get('after')
     if after_cursor:
-        await fetch_live_streams(after_cursor)
+        await fetch_live_streams(session, semaphore, after_cursor)
 
-async def process_live_streams(live_streams):
+async def process_live_streams(session, semaphore, live_streams):
     batch = [{"method": "GET", "relative_url": f"{stream['video']['id']}?fields=id,description,source"} for stream in live_streams]
     params = {
         "batch": json.dumps(batch),
@@ -76,12 +74,12 @@ async def process_live_streams(live_streams):
     tasks = []
     for resp in data:
         if resp['code'] == 200:
-            tasks.append(handle_video_response(resp))
+            tasks.append(handle_video_response(session, semaphore, resp))
     
     # Run all tasks concurrently
     await asyncio.gather(*tasks)
 
-async def handle_video_response(response):
+async def handle_video_response(session, semaphore, response):
     body = json.loads(response['body'])
     source = body.get('source')
     if not source:
@@ -90,7 +88,9 @@ async def handle_video_response(response):
     
     filename = f"{sanitize_filename(body.get('description', ''))}_{body['id']}"
     ext = get_file_extension(source)
-    await download_video(source, filename, ext)
+    
+    async with semaphore:
+        await download_video(session, source, filename, ext)
 
 def get_file_extension(url):
     return os.path.splitext(urlparse(url).path)[1] or ".mp4"
@@ -98,16 +98,16 @@ def get_file_extension(url):
 def sanitize_filename(name):
     return ''.join(c if c.isalnum() or c in "-_" else "" for c in name.replace(' ', '_')).upper().strip('_')[:40]
 
-async def download_video(url, filename, ext):
+async def download_video(session, url, filename, ext):
     global downloaded_count
     output_path = os.path.join(OUTPUT_DIR, f"{filename}{ext}")
     
     logger.info(f"Downloading {filename}{ext}")
     async with session.get(url) as response:
         response.raise_for_status()
-        with open(output_path, 'wb') as file:
+        async with aiofiles.open(output_path, 'wb') as file:
             async for chunk in response.content.iter_chunked(CHUNK_SIZE):
-                file.write(chunk)
+                await file.write(chunk)
     
     downloaded_count += 1
     logger.info(f"({downloaded_count}/{founded_count}) Downloaded {filename}{ext}")
@@ -132,10 +132,9 @@ def compress_video(input_path):
         logger.error(f"Compression failed for {os.path.basename(input_path)}")
 
 async def main():
-    global session
-    # Create a session for asynchronous HTTP requests
+    semaphore = asyncio.Semaphore(MAX_WORKERS)
     async with aiohttp.ClientSession() as session:
-        await fetch_live_streams()
+        await fetch_live_streams(session, semaphore)
 
 if __name__ == "__main__":
     asyncio.run(main())
