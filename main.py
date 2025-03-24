@@ -1,4 +1,5 @@
 import requests
+import subprocess
 import os
 import json
 from urllib.parse import urlparse
@@ -61,21 +62,21 @@ def batch_get_live_streams_sources(live_streams):
 
   download_tasks = []
   with ThreadPoolExecutor(max_workers=5) as executor:
-      for response in data:
-          if response['code'] != 200:
-              print(f"Error: {response['code']} - {response['body']['error']['message']}")
-          else:
-              body = json.loads(response['body'])
-              filename = sanitize_filename(body.get('description', body['id']))
-              filename = sanitize_filename(f"{body.get('description', '')}_{body['id']}")
-              ext = get_file_extension(body['source'])
-              download_tasks.append(executor.submit(download_video, body['source'], filename, ext))
+    for response in data:
+      if response['code'] != 200:
+        print(f"{'Error':<12} | API Error: {response['code']} - {response['body']['error']['message']}")
+      else:
+        body = json.loads(response['body'])
+        filename = sanitize_filename(body.get('description', body['id']))
+        filename = sanitize_filename(f"{body.get('description', '')}_{body['id']}")
+        ext = get_file_extension(body['source'])
+        download_tasks.append(executor.submit(download_video, body['source'], filename, ext))
 
       for future in as_completed(download_tasks):
-          try:
-              future.result()
-          except Exception as e:
-              print(f"Error en descarga: {e}")
+        try:
+            future.result()
+        except Exception as e:
+          print(f"{'Error':<12} | Download Failed: {e}")
 
 def sanitize_filename(name):
     return name.replace("/", "_").replace("\\", "_").replace(":", "_") \
@@ -96,6 +97,31 @@ def download_video(source, filename, ext=".mp4"):
         f.write(chunk)
       
   print(f"{'Done':<12} | {filename}{ext}")
+
+  compress_video(filename, ext)
+
+def compress_video(filename, ext):
+  print(f"{'Compressing':<12} | {filename}{ext}")
+
+  output_path = f"{OUTPUT_DIR}/{filename}{ext}"
+  compressed_path = f"{OUTPUT_DIR}/{filename}_compressed{ext}"
+
+  try:
+    subprocess.run(
+      ["ffmpeg", "-i", output_path, "-vcodec", "libx264", "-crf", "35", compressed_path, "-loglevel", "error"],
+      check=True
+    )
+
+    # Delete the original video
+    os.remove(output_path)
+
+    # Rename the compressed video to the original name
+    os.rename(compressed_path, output_path)
+
+    print(f"{'Compressed':<12} | {filename}{ext}")
+  except:
+    print(f"{'Error':<12} | Compression Failed: {filename}{ext}")
+    return
 
 if __name__ == "__main__":
   get_live_streams()
