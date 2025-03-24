@@ -29,7 +29,7 @@ def get_live_streams(after=None, total=0):
   found = len(data.get('data', []))
   total += found
 
-  print(f"Found {found} live streams (Total so far: {total})")
+  print(f"[ {'Found':<12} ] {found} live streams (Total so far: {total})")
 
   if (data.get('data', []) != []):
     batch_get_live_streams_sources(data.get('data', []))
@@ -48,7 +48,7 @@ def get_file_extension(url):
 def batch_get_live_streams_sources(live_streams):
   batch = []
 
-  print(f"Batching {len(live_streams)} live streams")
+  print(f"[ {'Batching':<12} ] {len(live_streams)} live streams")
 
   for live_stream in live_streams:
     request = {
@@ -88,7 +88,7 @@ def sanitize_filename(name):
 def download_video(source, filename, ext=".mp4"):
   output_path = f"{OUTPUT_DIR}/{filename}{ext}"
 
-  print(f"[ Downloading ] {filename}{ext}")
+  print(f"[ {'Downloading':<12} ] {filename}{ext}")
 
   r = requests.get(source, stream=True)
   r.raise_for_status()
@@ -98,7 +98,7 @@ def download_video(source, filename, ext=".mp4"):
       if chunk:
         f.write(chunk)
       
-  print(f"[ Downloaded ] {filename}{ext}")
+  print(f"[ {'Done':<12} ] {filename}{ext}")
 
 if __name__ == "__main__":
   get_live_streams()
