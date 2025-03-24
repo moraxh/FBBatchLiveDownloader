@@ -4,5 +4,9 @@ services:
     volumes:
       - ./main.py:/app/main.py
       - ./output:/app/output
+    env_file:
+      - .env
+    environment:
+      - FB_GRAPH_API_KEY=${FB_GRAPH_API_KEY}
 volumes:
   output:

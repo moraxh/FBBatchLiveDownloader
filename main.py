@@ -1,12 +1,10 @@
 import requests
 import os
 import json
-from dotenv import load_dotenv
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Load environment variables from .env file
-load_dotenv()
 FB_GRAPH_API_KEY = os.getenv('FB_GRAPH_API_KEY')
 
 OUTPUT_DIR = "output"
