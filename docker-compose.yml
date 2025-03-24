@@ -2,6 +2,7 @@ services:
   app:
     build: .
     volumes:
+      - ./main.py:/app/main.py
       - ./output:/app/output
 volumes:
   output:
