@@ -4,7 +4,6 @@ import json
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from moviepy.video.io.VideoFileClip import VideoFileClip
 
 # Load environment variables from .env file
 load_dotenv()
