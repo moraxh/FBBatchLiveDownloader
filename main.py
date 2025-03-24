@@ -2,6 +2,7 @@ import aiohttp
 import aiofiles
 import asyncio
 import subprocess
+import ffmpeg
 import os
 import json
 import logging
@@ -18,7 +19,6 @@ FB_GRAPH_API_URL = "https://graph.facebook.com/v22.0/"
 FB_BATCH_API_URL = "https://graph.facebook.com/me"
 CHUNK_SIZE = 8192
 MAX_WORKERS = 10
-FFMPEG_COMPRESSOR_PARAMS = ["-vcodec", "libx264", "-crf", "35", "-acodec", "aac", "-b:a", "96k", "-strict", "experimental", "-aac_coder", "fast"]
 
 downloaded_count = 0
 founded_count = 0
@@ -110,8 +110,8 @@ async def download_video(session, url, filename, ext):
                 await file.write(chunk)
     
     downloaded_count += 1
-    logger.info(f"({downloaded_count}/{founded_count}) Downloaded {filename}{ext}")
-    # compress_video(output_path)
+    logger.info(f"\033[32m({downloaded_count}/{founded_count})\033[0m Downloaded {filename}{ext}")
+    compress_video(output_path)
 
 def compress_video(input_path):
     compressed_path = input_path.replace(".mp4", "_compressed.mp4")
@@ -121,14 +121,22 @@ def compress_video(input_path):
     
     logger.info(f"Compressing {os.path.basename(input_path)}")
     try:
-        subprocess.run(
-            ["ffmpeg", "-i", input_path, *FFMPEG_COMPRESSOR_PARAMS, compressed_path, "-loglevel", "error"],
-            check=True
-        )
+      original_size = os.path.getsize(input_path)
+
+      ffmpeg.input(input_path).output(
+        compressed_path, vcodec='libx264', crf=35, acodec='aac', b='64k', loglevel='panic'
+      ).run(overwrite_output=True)
+
+      compressed_size = os.path.getsize(compressed_path)
+
+      if original_size > compressed_size:
         os.remove(input_path)
         os.rename(compressed_path, input_path)
-        logger.info(f"Compressed {os.path.basename(input_path)}")
-    except subprocess.CalledProcessError:
+        logger.info(f"\033[36m({100-(compressed_size/original_size*100):.2f}%)\033[0m Compressed {os.path.basename(input_path)}")
+      else:
+        os.remove(compressed_path)
+        logger.info(f"Compression not needed for {os.path.basename(input_path)}")
+    except:
         logger.error(f"Compression failed for {os.path.basename(input_path)}")
 
 async def main():
