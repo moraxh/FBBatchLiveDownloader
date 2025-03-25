@@ -66,7 +66,7 @@ async def fetch_live_streams(session, semaphore, after_cursor=None):
         await process_live_streams(session, semaphore, streams)
 
     if found_downloaded_videos:
-        logger.info("Found downloaded videos, stopping fetching")
+        logger.warning("Found downloaded videos, stopping fetching")
         return
     
     after_cursor = data.get('paging', {}).get('cursors', {}).get('after')
@@ -91,13 +91,29 @@ async def process_live_streams(session, semaphore, live_streams):
             tasks.append(handle_video_response(session, semaphore, resp))
     
     # Run all tasks concurrently
-    await asyncio.gather(*tasks)
+    downloaded_videos = await asyncio.gather(*tasks)
+
+    video_paths = [video for video in downloaded_videos if video]
+
+    if len(video_paths) > 0:
+        logger.info(f"All videos from this batch downloaded, compressing...")
+
+    await process_compressions(video_paths)
 
 async def handle_video_response(session, semaphore, response):
+    global videos_info, found_downloaded_videos
+
     body = json.loads(response['body'])
     source = body.get('source')
     if not source:
         logger.warning(f"Skipping Stream {body['id']} (No source)")
+        return
+
+    # Check if video already exists
+    if any(videos_info['id'].isin([int(body['id'])])):
+        logger.warning(f"Skipping Stream {body['id']} (Already downloaded)")
+        if not(found_downloaded_videos):
+            found_downloaded_videos = True
         return
     
     if (body.get('description')):
@@ -107,7 +123,7 @@ async def handle_video_response(session, semaphore, response):
     ext = get_file_extension(source)
     
     async with semaphore:
-        await download_video(session, source, filename, ext, body)
+        return await download_video(session, source, filename, ext, body)
 
 def get_file_extension(url):
     return os.path.splitext(urlparse(url).path)[1] or ".mp4"
@@ -116,16 +132,9 @@ def sanitize_filename(name):
     return ''.join(c if c.isalnum() or c in "-_" else "" for c in name.replace(' ', '_')).upper().strip('_')[:40]
 
 async def download_video(session, url, filename, ext, body):
-    global downloaded_count, videos_info, found_downloaded_videos
+    global downloaded_count
     output_path = os.path.join(OUTPUT_DIR, f"{filename}{ext}")
 
-    # Check if video already exists
-    if any(videos_info['id'].isin([int(body['id'])])):
-        logger.warning(f"Skipping Stream {body['id']} (Already downloaded)")
-        if not(found_downloaded_videos):
-            found_downloaded_videos = True
-        return
-    
     logger.info(f"Downloading {filename}{ext}")
     async with session.get(url) as response:
         response.raise_for_status()
@@ -135,11 +144,12 @@ async def download_video(session, url, filename, ext, body):
     
     downloaded_count += 1
     logger.info(f"\033[32m({downloaded_count}/{founded_count})\033[0m Downloaded {filename}{ext}")
-    # compress_video(output_path)
 
     # Save video info
     videos_info.loc[len(videos_info)] = [body['id'], body.get('description', ''), body.get('created_time', '')]
     videos_info.to_csv(VIDEOS_INFO_FILE, index=False)
+
+    return output_path  
 
 def compress_video(input_path):
     compressed_path = input_path.replace(".mp4", "_compressed.mp4")
@@ -149,23 +159,36 @@ def compress_video(input_path):
     
     logger.info(f"Compressing {os.path.basename(input_path)}")
     try:
-      original_size = os.path.getsize(input_path)
+        original_size = os.path.getsize(input_path)
 
-      ffmpeg.input(input_path).output(
-        compressed_path, vcodec='libx264', crf=35, acodec='aac', b='64k', loglevel='panic'
-      ).run(overwrite_output=True)
+        ffmpeg.input(input_path).output(
+            compressed_path,
+            vcodec='libx264',
+            preset='fast',
+            crf=35, 
+            acodec='aac', 
+            b='64k', 
+            loglevel='panic'
+        ).run(overwrite_output=True)
 
-      compressed_size = os.path.getsize(compressed_path)
+        compressed_size = os.path.getsize(compressed_path)
 
-      if original_size > compressed_size:
-        os.remove(input_path)
-        os.rename(compressed_path, input_path)
-        logger.info(f"\033[36m({100-(compressed_size/original_size*100):.2f}%)\033[0m Compressed {os.path.basename(input_path)}")
-      else:
-        os.remove(compressed_path)
-        logger.info(f"Compression not needed for {os.path.basename(input_path)}")
+        if original_size > compressed_size:
+            os.remove(input_path)
+            os.rename(compressed_path, input_path)
+            logger.info(f"\033[36m({100-(compressed_size/original_size*100):.2f}%)\033[0m Compressed {os.path.basename(input_path)}")
+        else:
+            os.remove(compressed_path)
+            logger.info(f"Compression not needed for {os.path.basename(input_path)}")
     except Exception as e:
         logger.error(f"Compression failed for {os.path.basename(input_path)} {e}")
+
+async def compress_video_parallel(input_path):
+    await asyncio.to_thread(compress_video, input_path)
+
+async def process_compressions(video_paths):
+    tasks = [compress_video_parallel(video) for video in video_paths if video]
+    await asyncio.gather(*tasks)
 
 async def main():
     semaphore = asyncio.Semaphore(MAX_WORKERS)
