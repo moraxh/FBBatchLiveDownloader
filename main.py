@@ -46,7 +46,7 @@ async def fetch_live_streams(session, semaphore, after_cursor=None):
     global founded_count, found_downloaded_videos
     params = {
         "fields": "video,status",
-        "limit": 10,
+        "limit": 50,
         "access_token": FB_GRAPH_API_KEY,
     }
     
