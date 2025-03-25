@@ -21,7 +21,8 @@ VIDEOS_INFO_FILE = f"{DATA_DIR}/videos.csv"
 FB_GRAPH_API_URL = "https://graph.facebook.com/v22.0/"
 FB_BATCH_API_URL = "https://graph.facebook.com/me"
 CHUNK_SIZE = 8192
-MAX_WORKERS = 10
+MAX_WORKERS_DOWNLOAD = 5
+MAX_WORKERS_COMPRESS = MAX_WORKERS_DOWNLOAD
 
 downloaded_count = 0
 founded_count = 0
@@ -45,7 +46,7 @@ async def fetch_live_streams(session, semaphore, after_cursor=None):
     global founded_count, found_downloaded_videos
     params = {
         "fields": "video,status",
-        "limit": 50,
+        "limit": 10,
         "access_token": FB_GRAPH_API_KEY,
     }
     
@@ -183,15 +184,17 @@ def compress_video(input_path):
     except Exception as e:
         logger.error(f"Compression failed for {os.path.basename(input_path)} {e}")
 
-async def compress_video_parallel(input_path):
-    await asyncio.to_thread(compress_video, input_path)
+async def compress_video_parallel(input_path, semaphore):
+    async with semaphore:
+        await asyncio.to_thread(compress_video, input_path)
 
 async def process_compressions(video_paths):
-    tasks = [compress_video_parallel(video) for video in video_paths if video]
+    semaphore = asyncio.Semaphore(MAX_WORKERS_COMPRESS)
+    tasks = [compress_video_parallel(video, semaphore) for video in video_paths if video]
     await asyncio.gather(*tasks)
 
 async def main():
-    semaphore = asyncio.Semaphore(MAX_WORKERS)
+    semaphore = asyncio.Semaphore(MAX_WORKERS_DOWNLOAD)
     async with aiohttp.ClientSession() as session:
         await fetch_live_streams(session, semaphore)
 
