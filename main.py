@@ -7,6 +7,7 @@ import os
 import json
 import logging
 import coloredlogs
+import pandas as pd
 from urllib.parse import urlparse
 
 # Configure coloredlogs
@@ -14,7 +15,9 @@ logger = logging.getLogger(__name__)
 coloredlogs.install(level='INFO', logger=logger, fmt='%(asctime)s [%(levelname)s] %(message)s', datefmt='%I:%M:%S %p', isatty=True)
 
 # Constants
-OUTPUT_DIR = "output"
+DATA_DIR = "data"
+OUTPUT_DIR = f"{DATA_DIR}/output"
+VIDEOS_INFO_FILE = f"{DATA_DIR}/videos.csv"
 FB_GRAPH_API_URL = "https://graph.facebook.com/v22.0/"
 FB_BATCH_API_URL = "https://graph.facebook.com/me"
 CHUNK_SIZE = 8192
@@ -22,6 +25,7 @@ MAX_WORKERS = 10
 
 downloaded_count = 0
 founded_count = 0
+found_downloaded_videos = False
 
 # Load API key
 FB_GRAPH_API_KEY = os.getenv('FB_GRAPH_API_KEY')
@@ -31,8 +35,14 @@ if not FB_GRAPH_API_KEY:
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Load data
+if os.path.exists(VIDEOS_INFO_FILE):
+    videos_info = pd.read_csv(VIDEOS_INFO_FILE)
+else:
+    videos_info = pd.DataFrame(columns=['id', 'description', 'creation_time'])
+
 async def fetch_live_streams(session, semaphore, after_cursor=None):
-    global founded_count
+    global founded_count, found_downloaded_videos
     params = {
         "fields": "video,status",
         "limit": 50,
@@ -54,13 +64,17 @@ async def fetch_live_streams(session, semaphore, after_cursor=None):
     
     if streams:
         await process_live_streams(session, semaphore, streams)
+
+    if found_downloaded_videos:
+        logger.info("Found downloaded videos, stopping fetching")
+        return
     
     after_cursor = data.get('paging', {}).get('cursors', {}).get('after')
     if after_cursor:
         await fetch_live_streams(session, semaphore, after_cursor)
 
 async def process_live_streams(session, semaphore, live_streams):
-    batch = [{"method": "GET", "relative_url": f"{stream['video']['id']}?fields=id,description,source"} for stream in live_streams]
+    batch = [{"method": "GET", "relative_url": f"{stream['video']['id']}?fields=id,description,source,created_time"} for stream in live_streams]
     params = {
         "batch": json.dumps(batch),
         "include_headers": "false",
@@ -86,11 +100,14 @@ async def handle_video_response(session, semaphore, response):
         logger.warning(f"Skipping Stream {body['id']} (No source)")
         return
     
-    filename = f"{sanitize_filename(body.get('description', ''))}_{body['id']}"
+    if (body.get('description')):
+        filename = f"{sanitize_filename(body.get('description'))}_{body['id']}"
+    else:
+        filename = f"{sanitize_filename(body['id'])}"
     ext = get_file_extension(source)
     
     async with semaphore:
-        await download_video(session, source, filename, ext)
+        await download_video(session, source, filename, ext, body)
 
 def get_file_extension(url):
     return os.path.splitext(urlparse(url).path)[1] or ".mp4"
@@ -98,9 +115,16 @@ def get_file_extension(url):
 def sanitize_filename(name):
     return ''.join(c if c.isalnum() or c in "-_" else "" for c in name.replace(' ', '_')).upper().strip('_')[:40]
 
-async def download_video(session, url, filename, ext):
-    global downloaded_count
+async def download_video(session, url, filename, ext, body):
+    global downloaded_count, videos_info, found_downloaded_videos
     output_path = os.path.join(OUTPUT_DIR, f"{filename}{ext}")
+
+    # Check if video already exists
+    if any(videos_info['id'].isin([int(body['id'])])):
+        logger.warning(f"Skipping Stream {body['id']} (Already downloaded)")
+        if not(found_downloaded_videos):
+            found_downloaded_videos = True
+        return
     
     logger.info(f"Downloading {filename}{ext}")
     async with session.get(url) as response:
@@ -111,7 +135,11 @@ async def download_video(session, url, filename, ext):
     
     downloaded_count += 1
     logger.info(f"\033[32m({downloaded_count}/{founded_count})\033[0m Downloaded {filename}{ext}")
-    compress_video(output_path)
+    # compress_video(output_path)
+
+    # Save video info
+    videos_info.loc[len(videos_info)] = [body['id'], body.get('description', ''), body.get('created_time', '')]
+    videos_info.to_csv(VIDEOS_INFO_FILE, index=False)
 
 def compress_video(input_path):
     compressed_path = input_path.replace(".mp4", "_compressed.mp4")
@@ -136,8 +164,8 @@ def compress_video(input_path):
       else:
         os.remove(compressed_path)
         logger.info(f"Compression not needed for {os.path.basename(input_path)}")
-    except:
-        logger.error(f"Compression failed for {os.path.basename(input_path)}")
+    except Exception as e:
+        logger.error(f"Compression failed for {os.path.basename(input_path)} {e}")
 
 async def main():
     semaphore = asyncio.Semaphore(MAX_WORKERS)

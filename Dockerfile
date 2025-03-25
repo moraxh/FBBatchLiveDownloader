@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-RUN apk add --no-cache ffmpeg
+RUN apk add --no-cache ffmpeg g++ postgresql-dev cargo gcc python3-dev libffi-dev musl-dev zlib-dev jpeg-dev
 
 RUN pip install -r requirements.txt
 

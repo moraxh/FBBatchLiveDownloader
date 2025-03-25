@@ -3,7 +3,7 @@ services:
     build: .
     volumes:
       - ./main.py:/app/main.py
-      - ./output:/app/output
+      - ./data:/app/data
     env_file:
       - .env
     environment:
