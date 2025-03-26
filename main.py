@@ -103,7 +103,7 @@ async def process_live_streams(session, semaphore, live_streams):
     await process_compressions(video_paths)
 
 async def handle_video_response(session, semaphore, response):
-    global videos_info, found_downloaded_videos
+    global videos_info, found_downloaded_videos, downloaded_count
 
     body = json.loads(response['body'])
     source = body.get('source')
@@ -113,6 +113,7 @@ async def handle_video_response(session, semaphore, response):
 
     # Check if video already exists
     if any(videos_info['id'].isin([int(body['id'])])):
+        downloaded_count += 1
         logger.warning(f"Skipping Stream {body['id']} (Already downloaded)")
         if not(found_downloaded_videos):
             found_downloaded_videos = True
