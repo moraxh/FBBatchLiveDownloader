@@ -23,6 +23,7 @@ FB_BATCH_API_URL = "https://graph.facebook.com/me"
 CHUNK_SIZE = 8192
 MAX_WORKERS_DOWNLOAD = 5
 MAX_WORKERS_COMPRESS = MAX_WORKERS_DOWNLOAD
+STOP_ON_FOUNDED_DOWNLOADED_VIDEOS = False
 
 downloaded_count = 0
 founded_count = 0
@@ -66,7 +67,7 @@ async def fetch_live_streams(session, semaphore, after_cursor=None):
     if streams:
         await process_live_streams(session, semaphore, streams)
 
-    if found_downloaded_videos:
+    if found_downloaded_videos and STOP_ON_FOUNDED_DOWNLOADED_VIDEOS:
         logger.warning("Found downloaded videos, stopping fetching")
         return
     
@@ -132,25 +133,35 @@ def get_file_extension(url):
 def sanitize_filename(name):
     return ''.join(c if c.isalnum() or c in "-_" else "" for c in name.replace(' ', '_')).upper().strip('_')[:40]
 
-async def download_video(session, url, filename, ext, body):
+async def download_video(session, url, filename, ext, body, retries=3):
     global downloaded_count
     output_path = os.path.join(OUTPUT_DIR, f"{filename}{ext}")
 
-    logger.info(f"Downloading {filename}{ext}")
-    async with session.get(url) as response:
-        response.raise_for_status()
-        async with aiofiles.open(output_path, 'wb') as file:
-            async for chunk in response.content.iter_chunked(CHUNK_SIZE):
-                await file.write(chunk)
-    
-    downloaded_count += 1
-    logger.info(f"\033[32m({downloaded_count}/{founded_count})\033[0m Downloaded {filename}{ext}")
+    for attempt in range(retries):
+        try:
+            logger.info(f"Downloading {filename}{ext}")
+            async with session.get(url) as response:
+                response.raise_for_status()
+                async with aiofiles.open(output_path, 'wb') as file:
+                    async for chunk in response.content.iter_chunked(CHUNK_SIZE):
+                        await file.write(chunk)
+            
+            downloaded_count += 1
+            logger.info(f"\033[32m({downloaded_count}/{founded_count})\033[0m Downloaded {filename}{ext}")
 
-    # Save video info
-    videos_info.loc[len(videos_info)] = [body['id'], body.get('description', ''), body.get('created_time', '')]
-    videos_info.to_csv(VIDEOS_INFO_FILE, index=False)
+            # Save video info
+            videos_info.loc[len(videos_info)] = [body['id'], body.get('description', ''), body.get('created_time', '')]
+            videos_info.to_csv(VIDEOS_INFO_FILE, index=False)
 
-    return output_path  
+            return output_path  
+        except aiohttp.client_exceptions.ClientPayloadError as e:
+            logger.error(f"Download failed for {filename}{ext} {e}")
+            if attempt < retries - 1:
+                logger.warning(f"Retrying {filename}{ext} (Attempt {attempt + 2}/{retries})")
+                await asyncio.sleep(5)
+            else:
+                logger.error(f"Max retries reached for {filename}{ext}")
+                return None
 
 def compress_video(input_path):
     compressed_path = input_path.replace(".mp4", "_compressed.mp4")
