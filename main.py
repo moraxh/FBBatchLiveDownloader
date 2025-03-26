@@ -46,7 +46,7 @@ else:
 async def fetch_live_streams(session, semaphore, after_cursor=None):
     global founded_count, found_downloaded_videos
     params = {
-        "fields": "video,status",
+        "fields": "video,status,description",
         "limit": 50,
         "access_token": FB_GRAPH_API_KEY,
     }
@@ -77,6 +77,8 @@ async def fetch_live_streams(session, semaphore, after_cursor=None):
 
 async def process_live_streams(session, semaphore, live_streams):
     global videos_info, found_downloaded_videos, downloaded_count
+
+    non_duplicate_streams = []
     # Check if video already exists
     for stream in live_streams:
         if any(videos_info['id'].isin([int(stream['video']['id'])])):
@@ -84,7 +86,10 @@ async def process_live_streams(session, semaphore, live_streams):
             logger.warning(f"Skipping Stream {stream['video']['id']} (Already downloaded)")
             if not(found_downloaded_videos):
                 found_downloaded_videos = True
-            live_streams.remove(stream)
+        else:
+            non_duplicate_streams.append(stream)
+    
+    live_streams = non_duplicate_streams
 
     batch = [{"method": "GET", "relative_url": f"{stream['video']['id']}?fields=id,description,source,created_time"} for stream in live_streams]
     params = {
