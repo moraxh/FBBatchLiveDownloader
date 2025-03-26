@@ -76,6 +76,16 @@ async def fetch_live_streams(session, semaphore, after_cursor=None):
         await fetch_live_streams(session, semaphore, after_cursor)
 
 async def process_live_streams(session, semaphore, live_streams):
+    global videos_info, found_downloaded_videos, downloaded_count
+    # Check if video already exists
+    for stream in live_streams:
+        if any(videos_info['id'].isin([int(stream['video']['id'])])):
+            downloaded_count += 1
+            logger.warning(f"Skipping Stream {stream['video']['id']} (Already downloaded)")
+            if not(found_downloaded_videos):
+                found_downloaded_videos = True
+            live_streams.remove(stream)
+
     batch = [{"method": "GET", "relative_url": f"{stream['video']['id']}?fields=id,description,source,created_time"} for stream in live_streams]
     params = {
         "batch": json.dumps(batch),
@@ -103,20 +113,10 @@ async def process_live_streams(session, semaphore, live_streams):
     await process_compressions(video_paths)
 
 async def handle_video_response(session, semaphore, response):
-    global videos_info, found_downloaded_videos, downloaded_count
-
     body = json.loads(response['body'])
     source = body.get('source')
     if not source:
         logger.warning(f"Skipping Stream {body['id']} (No source)")
-        return
-
-    # Check if video already exists
-    if any(videos_info['id'].isin([int(body['id'])])):
-        downloaded_count += 1
-        logger.warning(f"Skipping Stream {body['id']} (Already downloaded)")
-        if not(found_downloaded_videos):
-            found_downloaded_videos = True
         return
     
     if (body.get('description')):
