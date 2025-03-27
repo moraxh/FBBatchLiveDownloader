@@ -43,37 +43,46 @@ if os.path.exists(VIDEOS_INFO_FILE):
 else:
     videos_info = pd.DataFrame(columns=['id', 'description', 'creation_time'])
 
-async def fetch_live_streams(session, semaphore, after_cursor=None):
+async def fetch_live_streams(session, semaphore, after_cursor=None, retries=3):
     global founded_count, found_downloaded_videos
     params = {
         "fields": "video,status,description",
         "limit": 50,
         "access_token": FB_GRAPH_API_KEY,
     }
-    
-    if after_cursor:
-        params["after"] = after_cursor
-    
-    async with session.get(f"{FB_GRAPH_API_URL}me/live_videos", params=params) as response:
-        response.raise_for_status()
-        data = await response.json()
-    
-    streams = data.get('data', [])
-    streams = [stream for stream in streams if stream.get('status') != 'LIVE']
-    founded_count += len(streams)
-    
-    logger.info(f"Found {len(streams)} live streams (Total so far: {founded_count})")
-    
-    if streams:
-        await process_live_streams(session, semaphore, streams)
 
-    if found_downloaded_videos and STOP_ON_FOUNDED_DOWNLOADED_VIDEOS:
-        logger.warning("Found downloaded videos, stopping fetching")
-        return
-    
-    after_cursor = data.get('paging', {}).get('cursors', {}).get('after')
-    if after_cursor:
-        await fetch_live_streams(session, semaphore, after_cursor)
+    for attempt in range(retries):
+        try:
+            if after_cursor:
+                params["after"] = after_cursor
+            
+            async with session.get(f"{FB_GRAPH_API_URL}me/live_videos", params=params) as response:
+                response.raise_for_status()
+                data = await response.json()
+            
+            streams = data.get('data', [])
+            streams = [stream for stream in streams if stream.get('status') != 'LIVE']
+            founded_count += len(streams)
+            
+            logger.info(f"Found {len(streams)} live streams (Total so far: {founded_count})")
+            
+            if streams:
+                await process_live_streams(session, semaphore, streams)
+
+            if found_downloaded_videos and STOP_ON_FOUNDED_DOWNLOADED_VIDEOS:
+                logger.warning("Found downloaded videos, stopping fetching")
+                return
+            
+            after_cursor = data.get('paging', {}).get('cursors', {}).get('after')
+            if after_cursor:
+                await fetch_live_streams(session, semaphore, after_cursor)
+            
+            return
+        except Exception as e:
+            logger.error(f"Error fetching live streams: {e}")
+            if retries > 0:
+                logger.warning(f"Retrying after {retries} seconds")
+                await asyncio.sleep(retries)
 
 async def process_live_streams(session, semaphore, live_streams):
     global videos_info, found_downloaded_videos, downloaded_count
@@ -160,7 +169,7 @@ async def download_video(session, url, filename, ext, body, retries=3):
             videos_info.to_csv(VIDEOS_INFO_FILE, index=False)
 
             return output_path  
-        except aiohttp.client_exceptions.ClientPayloadError as e:
+        except Exception as e:
             logger.error(f"Download failed for {filename}{ext} {e}")
             if attempt < retries - 1:
                 logger.warning(f"Retrying {filename}{ext} (Attempt {attempt + 2}/{retries})")
